@@ -72,3 +72,66 @@ The search might be slower on machine with remote SSDs. The output lists the que
     50           2         6421.66         9913.28        16550.00           38.35          116.86           99.63
    100           2         3337.98        19107.81        29292.00           76.59          226.88           99.91
 ```
+
+**用于基于SSD的索引的用法**
+================================
+
+**生成SSD友好的索引**  
+使用`apps/build_disk_index`程序。  
+--------------------------------------------------
+
+参数说明如下：
+
+1. **--data_type**：构建索引的数据集类型。支持32位浮点数(float)、有符号int8和无符号uint8。
+2. **--dist_fn**：支持三种距离函数：余弦距离(cosine distance)、最小欧几里得距离(l2)和最大内积(mips)。
+3. **--data_file**：用于构建索引的输入数据，格式为.bin。前4个字节表示点数(整数)，接下来的4个字节表示数据维度(整数)。后续为`n*d*sizeof(T)`字节数据，每次表示一个数据点，其中`sizeof(T)`为有符号或无符号字节索引时为1，浮点索引时为4。
+4. **--index_path_prefix**：索引会生成几个文件，所有文件的前缀路径都相同。例如，提供路径前缀`~/index_test`，会生成文件如`~/index_test_pq_pivots.bin`，`~/index_test_pq_compressed.bin`，`~/index_test_disk.index`等，具体数量取决于索引构建方式。
+5. **-R (--max_degree)**（默认值为64）：图索引的度数，通常在60到150之间。R值越大，索引越大，构建时间越长，但搜索质量越高。
+6. **-L (--Lbuild)**（默认值为100）：索引构建时的搜索列表大小。典型值为75到200。值越大，构建时间越长，但索引的召回率也会提高。L值通常至少应等于R值。
+7. **-B (--search_DRAM_budget)**：索引搜索时的内存限制，单位为GB。索引构建后，仅使用指定的内存，剩余部分存储在磁盘上。内存越大，搜索性能越好。
+8. **-M (--build_DRAM_budget)**：构建索引时的内存限制，单位为GB。如果指定值小于所需内存，索引将分段构建，并合并生成整体索引。分段构建的速度可能是一次性构建的1.5倍。
+9. **-T (--num_threads)**（默认值为`get_omp_num_procs()`）：构建索引时使用的线程数。线程数越多，构建时间几乎呈线性下降（受限于机器的核心数量和内存带宽）。
+10. **--PQ_disk_bytes**（默认值为0）：设置为0以在SSD上存储未压缩数据。设置此值以使用PQ压缩存储在SSD上的向量数据，从而在召回率上进行权衡。
+11. **--build_PQ_bytes**（默认值为0）：设置为小于数据维度的正值，以启用基于PQ的距离比较，从而加速索引构建。
+12. **--use_opq**：使用此标志启用OPQ压缩，而非PQ压缩。OPQ在某些高维数据集上更节省空间，但需要更多的构建时间。
+
+**搜索SSD索引**  
+使用`apps/search_disk_index`程序。  
+-------------------------------------------------
+
+参数说明如下：
+
+1. **--data_type**：构建索引时所使用的数据集类型（float、int8、uint8）。
+2. **--dist_fn**：支持两种距离函数：最小欧几里得距离(l2)和最大内积(mips)。需与构建索引时的距离函数保持一致。
+3. **--index_path_prefix**：与构建索引时的前缀路径相同。
+4. **--num_nodes_to_cache**（默认值为0）：索引的整个图存储在SSD上。为了更快的搜索性能，可以在内存中缓存一些频繁访问的节点。
+5. **-T (--num_threads)**（默认值为`get_omp_num_procs()`）：搜索时的线程数。线程以并行方式运行，每个线程一次处理一个查询。
+6. **-W (--beamwidth)**（默认值为2）：搜索时的beamwidth，即每个查询在每次迭代中发出的最大IO请求数。较大的beamwidth会减少查询的IO轮询次数，但可能会增加每次查询的IO总请求数。
+7. **--query_file**：用于搜索的查询文件，与构建索引时的数据类型相同。
+8. **--gt_file**：查询的ground truth文件，包含查询的最近邻点及其距离。如果没有该文件，可使用`apps/utils/compute_groundtruth`程序计算。
+9. **K**：搜索的最近邻个数，计算`K`的召回率，即检索的前`K`最近邻与ground truth的前`K`最近邻的交集。
+10. **result_output_prefix**：搜索结果将以指定的前缀存储为bin格式文件。
+11. **-L (--search_list)**：搜索时的搜索列表大小。值越大，延迟越高，但准确率越高。至少需要等于参数`K`的值。
+
+**BIGANN示例：**  
+--------------------------------
+以下示例演示了在100K大小的BIGANN数据集切片上，使用128维SIFT描述符的索引构建和搜索。
+
+下载数据并转换为二进制格式：
+```bash
+mkdir -p DiskANN/build/data && cd DiskANN/build/data
+wget ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
+tar -xf sift.tar.gz
+cd ..
+./apps/utils/fvecs_to_bin float data/sift/sift_learn.fvecs data/sift/sift_learn.fbin
+./apps/utils/fvecs_to_bin float data/sift/sift_query.fvecs data/sift/sift_query.fbin
+```
+
+构建索引并使用bruteforce计算召回率：
+```bash
+./apps/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file data/sift/sift_learn.fbin --query_file data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_gt100 --K 100
+./apps/build_disk_index --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 -R 32 -L50 -B 0.003 -M 1
+./apps/search_disk_index --data_type float --dist_fn l2 --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 --query_file data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --num_nodes_to_cache 10000
+```
+
+搜索在远程SSD的机器上可能较慢，输出将列出查询吞吐量、平均和99.9%的延迟、每查询的平均4KB IO数以及召回率。
