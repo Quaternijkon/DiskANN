@@ -73,51 +73,50 @@ The search might be slower on machine with remote SSDs. The output lists the que
    100           2         3337.98        19107.81        29292.00           76.59          226.88           99.91
 ```
 
-**用于基于SSD的索引的用法**
-================================
+**基于SSD的索引使用方法**
+===============================
 
-**生成SSD友好的索引**  
-使用`apps/build_disk_index`程序。  
---------------------------------------------------
-
-参数说明如下：
-
-1. **--data_type**：构建索引的数据集类型。支持32位浮点数(float)、有符号int8和无符号uint8。
-2. **--dist_fn**：支持三种距离函数：余弦距离(cosine distance)、最小欧几里得距离(l2)和最大内积(mips)。
-3. **--data_file**：用于构建索引的输入数据，格式为.bin。前4个字节表示点数(整数)，接下来的4个字节表示数据维度(整数)。后续为`n*d*sizeof(T)`字节数据，每次表示一个数据点，其中`sizeof(T)`为有符号或无符号字节索引时为1，浮点索引时为4。
-4. **--index_path_prefix**：索引会生成几个文件，所有文件的前缀路径都相同。例如，提供路径前缀`~/index_test`，会生成文件如`~/index_test_pq_pivots.bin`，`~/index_test_pq_compressed.bin`，`~/index_test_disk.index`等，具体数量取决于索引构建方式。
-5. **-R (--max_degree)**（默认值为64）：图索引的度数，通常在60到150之间。R值越大，索引越大，构建时间越长，但搜索质量越高。
-6. **-L (--Lbuild)**（默认值为100）：索引构建时的搜索列表大小。典型值为75到200。值越大，构建时间越长，但索引的召回率也会提高。L值通常至少应等于R值。
-7. **-B (--search_DRAM_budget)**：索引搜索时的内存限制，单位为GB。索引构建后，仅使用指定的内存，剩余部分存储在磁盘上。内存越大，搜索性能越好。
-8. **-M (--build_DRAM_budget)**：构建索引时的内存限制，单位为GB。如果指定值小于所需内存，索引将分段构建，并合并生成整体索引。分段构建的速度可能是一次性构建的1.5倍。
-9. **-T (--num_threads)**（默认值为`get_omp_num_procs()`）：构建索引时使用的线程数。线程数越多，构建时间几乎呈线性下降（受限于机器的核心数量和内存带宽）。
-10. **--PQ_disk_bytes**（默认值为0）：设置为0以在SSD上存储未压缩数据。设置此值以使用PQ压缩存储在SSD上的向量数据，从而在召回率上进行权衡。
-11. **--build_PQ_bytes**（默认值为0）：设置为小于数据维度的正值，以启用基于PQ的距离比较，从而加速索引构建。
-12. **--use_opq**：使用此标志启用OPQ压缩，而非PQ压缩。OPQ在某些高维数据集上更节省空间，但需要更多的构建时间。
-
-**搜索SSD索引**  
-使用`apps/search_disk_index`程序。  
--------------------------------------------------
+要生成一个适合SSD的索引，请使用`apps/build_disk_index`程序。
+----------------------------------------------------------------------------
 
 参数说明如下：
 
-1. **--data_type**：构建索引时所使用的数据集类型（float、int8、uint8）。
-2. **--dist_fn**：支持两种距离函数：最小欧几里得距离(l2)和最大内积(mips)。需与构建索引时的距离函数保持一致。
-3. **--index_path_prefix**：与构建索引时的前缀路径相同。
-4. **--num_nodes_to_cache**（默认值为0）：索引的整个图存储在SSD上。为了更快的搜索性能，可以在内存中缓存一些频繁访问的节点。
-5. **-T (--num_threads)**（默认值为`get_omp_num_procs()`）：搜索时的线程数。线程以并行方式运行，每个线程一次处理一个查询。
-6. **-W (--beamwidth)**（默认值为2）：搜索时的beamwidth，即每个查询在每次迭代中发出的最大IO请求数。较大的beamwidth会减少查询的IO轮询次数，但可能会增加每次查询的IO总请求数。
-7. **--query_file**：用于搜索的查询文件，与构建索引时的数据类型相同。
-8. **--gt_file**：查询的ground truth文件，包含查询的最近邻点及其距离。如果没有该文件，可使用`apps/utils/compute_groundtruth`程序计算。
-9. **K**：搜索的最近邻个数，计算`K`的召回率，即检索的前`K`最近邻与ground truth的前`K`最近邻的交集。
-10. **result_output_prefix**：搜索结果将以指定的前缀存储为bin格式文件。
-11. **-L (--search_list)**：搜索时的搜索列表大小。值越大，延迟越高，但准确率越高。至少需要等于参数`K`的值。
+1. **--data_type**: 要构建索引的数据集类型。支持32位浮点数（float）、8位有符号整数（signed int8）和8位无符号整数（unsigned uint8）。 
+2. **--dist_fn**: 支持三种距离函数：余弦距离（cosine distance）、最小欧几里得距离（l2）和最大内积（mips）。
+3. **--data_file**: 输入的数据文件，以.bin格式存储。文件的前4个字节表示数据点的数量（整数），接下来的4个字节表示数据的维度（整数）。之后的`n*d*sizeof(T)`字节包含数据的内容，每次存储一个数据点。`sizeof(T)`对于字节索引为1，对于浮点数索引为4。程序将按签名索引（int8_t）、无符号索引（uint8_t）或浮点数索引（float）读取这些数据。
+4. **--index_path_prefix**: 索引将跨多个文件生成，所有文件名前缀为指定的路径。例如，如果提供`~/index_test`作为前缀路径，生成的文件将类似于`~/index_test_pq_pivots.bin`、`~/index_test_pq_compressed.bin`、`~/index_test_disk.index`等。生成的文件数目通常在8到10个之间，具体取决于索引构建方式。
+5. **-R (--max_degree)** （默认值为64）：图索引的度数，通常在60到150之间。较大的R值会导致更大的索引和更长的构建时间，但能提供更好的搜索质量。 
+6. **-L (--Lbuild)** （默认值为100）：构建索引时的搜索列表大小。通常值在75到200之间。较大的L值会增加构建时间，但会提高索引的召回率。除非需要非常快速地构建索引并且可以在质量上做出一些妥协，否则L的值应至少为R的值。
+7. **-B (--search_DRAM_budget)**: 搜索时索引的内存限制，单位为GB。索引构建后，将仅使用指定的内存限制，剩余部分存储在磁盘上。此参数决定了我们在内存中压缩数据向量的程度。较大的B值将提高搜索时的性能。对于n个数据点的索引，使用b字节的PQ压缩表示存储在内存中时，使用公式`B = ((n * b) / 2^30 + (250000*(4*R + sizeof(T)*ndim)) / 2^30)`来计算。公式中的第二项用于缓存大约250,000个图节点的缓冲区。如果不确定此项的大小，可以在第一项基础上加上0.25GB。
+8. **-M (--build_DRAM_budget)**: 构建索引时允许使用的内存限制，单位为GB。如果指定的值小于构建索引所需的内存，则会使用分治法构建索引，将子图按内存限制合并。此方法可能比一次性构建索引慢1.5倍。应根据机器的RAM大小分配尽可能多的内存。
+9. **-T (--num_threads)** （默认值为`get_omp_num_procs()`）：构建索引时使用的线程数。由于代码高度并行化，线程数增加会使索引构建时间几乎线性缩短（受机器核心数和内存带宽的限制）。
+10. **--PQ_disk_bytes** （默认值为0）：使用0表示在SSD上存储未压缩的数据。这允许索引达到100%的召回率。如果数据向量太大无法存储在SSD中，则可以使用PQ压缩向量并存储在SSD上。这会牺牲一定的召回率。此参数值应大于在内存中存储PQ压缩数据所使用的字节数。
+11. **--build_PQ_bytes** （默认值为0）：设置一个小于数据维度的正值，以启用基于PQ的距离比较进行更快速的索引构建。
+12. **--use_opq**: 使用该标志启用OPQ压缩而非PQ压缩。OPQ对于某些高维数据集更节省空间，但也需要更多的构建时间。
 
-**BIGANN示例：**  
---------------------------------
-以下示例演示了在100K大小的BIGANN数据集切片上，使用128维SIFT描述符的索引构建和搜索。
+要搜索SSD索引，请使用`apps/search_disk_index`程序。
+-------------------------------------------------------------------
 
-下载数据并转换为二进制格式：
+参数说明如下：
+
+1. **--data_type**: 要构建索引的数据集类型。支持32位浮点数（float）、8位有符号整数（signed int8）和8位无符号整数（unsigned uint8）。必须与构建索引时的参数（1）相同。
+2. **--dist_fn**: 支持两种距离函数：最小欧几里得距离（l2）和最大内积（mips）。必须与构建索引时的参数（2）相同。
+3. **--index_path_prefix**: 与构建索引时使用的前缀相同（参见参数4）。
+4. **--num_nodes_to_cache** （默认值为0）：在搜索时，整个图存储在SSD上。为了提高搜索性能，您可以将一些经常访问的节点缓存到内存中。
+5. **-T (--num_threads)** （默认值为`get_omp_num_procs()`）：搜索时使用的线程数。线程并行运行，每个线程处理一个查询。增加线程数可以提高查询吞吐量，但也会增加系统的IO操作次数，从而可能导致更高的每查询延迟。根据SSD的最大IOPS选择合适的线程数。
+6. **-W (--beamwidth)** （默认值为2）：搜索时使用的宽度。这是每次搜索迭代中，每个查询最多发出的IO请求数。较大的宽度将减少每个查询的IO往返次数，但可能导致每查询的总IO请求数略有增加。为了在固定的SSD IOPS下实现最高的查询吞吐量，使用`W=1`。为了获得最佳的延迟，使用`W=4,8`或更复杂的搜索。指定0时，宽度将根据执行搜索的线程数自动优化，但可能会涉及一定的调优开销。
+7. **--query_file**: 查询文件，格式与参数（2）中的数据文件相同。查询文件的类型必须与构建索引时的参数（1）相同。
+8. **--gt_file**: 查询文件的 ground truth 文件，格式与构建索引时的数据文件相同。二进制文件应以`n`（查询数量，4字节）开始，接着是`d`（每个查询的ground truth元素数，4字节），然后是`n*d`个整数（表示每个查询的d个最近邻的ID），之后是`n*d`个浮点数（表示对应的距离）。总文件大小为`8 + 4*n*d + 4*n*d`字节。如果没有ground truth文件，可以使用`apps/utils/compute_groundtruth`程序计算。如果没有该文件，也不想计算召回率，可以使用"null"。
+9. **K**: 搜索*K*个邻居并测量*K*-召回率（K-recall@K），即检索到的前*K*个邻居与ground truth中*K*个最近邻的交集。
+10. **result_output_prefix**: 搜索结果将存储在以指定前缀命名的文件中，文件格式为二进制。
+11. **-L (--search_list)**: 要使用的多个搜索列表大小。较大的参数将导致更慢的延迟，但更高的准确率。该值必须至少为参数（9）中K的值。
+
+**BIGANN示例：**
+--------------------
+
+该示例演示了在128维SIFT描述符上，使用上面命令操作100K大小的[BIGANN数据集](http://corpus-texmex.irisa.fr/)。
+
+下载基准和查询集并转换为二进制格式：
 ```bash
 mkdir -p DiskANN/build/data && cd DiskANN/build/data
 wget ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
@@ -127,11 +126,25 @@ cd ..
 ./apps/utils/fvecs_to_bin float data/sift/sift_query.fvecs data/sift/sift_query.fbin
 ```
 
-构建索引并使用bruteforce计算召回率：
+现在构建索引并进行搜索，使用暴力计算的ground truth测量召回率：
 ```bash
-./apps/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file data/sift/sift_learn.fbin --query_file data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_gt100 --K 100
-./apps/build_disk_index --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 -R 32 -L50 -B 0.003 -M 1
-./apps/search_disk_index --data_type float --dist_fn l2 --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 --query_file data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --num_nodes_to_cache 10000
-```
+./apps/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file data/sift/sift_learn.fbin --query_file  data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_gt100 --K 100
+# 使用0.003GB搜索
 
-搜索在远程SSD的机器上可能较慢，输出将列出查询吞吐量、平均和99.9%的延迟、每查询的平均4KB IO数以及召回率。
+内存预算，针对100K向量进行32字节的PQ压缩
+./apps/build_disk_index --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 -R 32 -L50 -B 0.003 -M 1
+ ./apps/search_disk_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --num_nodes_to_cache 10000
+ ```
+
+搜索在使用远程SSD的机器上可能会较慢。输出结果列出了每个`L`参数设置下的查询吞吐量、平均延迟和99.9%延迟（单位为微秒），以及每个查询的平均4KB磁盘IO次数。
+
+```
+    L   Beamwidth             QPS    平均延迟（微秒）    99.9%延迟（微秒）    平均IO次数      CPU时间（秒）    Recall@10
+======================================================================================================================
+    10           2        27723.95         2271.92         4700.00            8.81           40.47           81.79
+    20           2        15369.23         4121.04         7576.00           15.93           61.60           96.42
+    30           2        10335.75         6147.14        11424.00           23.30           74.96           98.78
+    40           2         7684.18         8278.83        14714.00           30.78           94.27           99.40
+    50           2         6421.66         9913.28        16550.00           38.35          116.86           99.63
+   100           2         3337.98        19107.81        29292.00           76.59          226.88           99.91
+```
